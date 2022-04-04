@@ -1,4 +1,5 @@
-use byteorder::{BigEndian, NetworkEndian, ReadBytesExt}; // 1.2.7
+use byteorder::{NetworkEndian, ReadBytesExt};
+use socketron::IsoMessage;
 use std::net::SocketAddr;
 
 use tokio::{
@@ -35,19 +36,22 @@ async fn main() -> Result<(), io::Error> {
 }
 
 async fn handle_connection(mut stream: TcpStream) -> Result<(), io::Error> {
-    let (reader, writer) = stream.split();
+    let (reader, _writer) = stream.split();
 
+    reader.readable().await?;
     let mut context_buf: Vec<u8> = Vec::with_capacity(3_418_usize + 2); // Based on ISO 8583 spec
-    let mut temp_buf: Vec<u8> = Vec::with_capacity(3_418_usize + 2);
+    let mut temp_buf = [0; 4096];
 
     loop {
-        reader.readable().await?;
         let message = match reader.try_read(&mut temp_buf) {
             Ok(0) => {
                 println!("Received 0 bytes breaking");
                 break;
             }
-            Ok(_) => handle_read_bytes(&mut temp_buf, &mut context_buf)?,
+            Ok(bytes_read) => {
+                println!("Received {} bytes", bytes_read);
+                handle_read_bytes(bytes_read, &mut temp_buf, &mut context_buf)?
+            }
 
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 continue;
@@ -58,7 +62,9 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), io::Error> {
         };
 
         if let Some(message) = message {
-            println!("Gotta full message: \n{}", message);
+            let iso_message = IsoMessage::new(message);
+
+            println!("Message type: {:?}", iso_message.get_type());
         }
 
         println!("Bytes in context_buf after: {}", context_buf.len());
@@ -69,31 +75,57 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), io::Error> {
 }
 
 fn handle_read_bytes(
-    temp_buf: &mut Vec<u8>,
+    bytes_read: usize,
+    temp_buf: &mut [u8],
     context_buf: &mut Vec<u8>,
 ) -> Result<Option<String>, io::Error> {
     let mut message: Option<String> = None;
 
     if context_buf.len() == 0 {
+        println!("Context Buffer is Empty route");
+
         let expect_message_length = get_message_length(&temp_buf)?;
 
-        if temp_buf.len() >= (expect_message_length as usize + LENGTH_PREFIX_SIZE) {
+        println!(
+            "Expected message length in buffer: {}",
+            expect_message_length
+        );
+
+        if bytes_read >= (expect_message_length as usize + LENGTH_PREFIX_SIZE) {
+            println!(
+                "{} >= {} + {}",
+                bytes_read, expect_message_length, LENGTH_PREFIX_SIZE
+            );
+
+            println!(
+                "Buffer to convert: {:?}",
+                temp_buf[LENGTH_PREFIX_SIZE..(LENGTH_PREFIX_SIZE + expect_message_length as usize)]
+                    .to_vec()
+            );
+
             message = Some(
-                String::from_utf8(
-                    temp_buf[LENGTH_PREFIX_SIZE..expect_message_length as usize].to_vec(),
+                String::from_utf8_lossy(
+                    &temp_buf
+                        [LENGTH_PREFIX_SIZE..(LENGTH_PREFIX_SIZE + expect_message_length as usize)],
                 )
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid utf-8"))?,
+                .to_string(),
             );
 
             context_buf.append(
-                &mut temp_buf[LENGTH_PREFIX_SIZE + expect_message_length as usize..].to_vec(),
+                &mut temp_buf[LENGTH_PREFIX_SIZE + expect_message_length as usize..bytes_read]
+                    .to_vec(),
             );
-            temp_buf.clear();
         } else {
-            context_buf.append(temp_buf);
+            println!(
+                "{} != {} + {}",
+                bytes_read, expect_message_length, LENGTH_PREFIX_SIZE
+            );
+            panic!("Not ready for this use case yet");
+
+            // context_buf.append(&mut temp_buf[..bytes_read].to_vec());
         }
     } else {
-        let expect_message_length = get_message_length(&context_buf)?;
+        let _expect_message_length = get_message_length(&context_buf)?;
 
         panic!("Not ready for this use case yet");
     }
