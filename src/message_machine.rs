@@ -1,5 +1,4 @@
 use crate::{
-    iso_message::IsoMessage,
     message_helpers::{
         get_message_length, received_full_message, received_multiple_messages,
         received_new_message, received_partial_message, received_rest_of_message,
@@ -7,11 +6,16 @@ use crate::{
     LENGTH_PREFIX_SIZE,
 };
 
+use iso_8583_message::IsoMessage;
+
+#[derive(Debug)]
 pub enum State {
     Ready,
     Waiting,
     Delivering,
 }
+
+#[derive(Debug)]
 
 struct InnerContext {
     buffer: Vec<u8>,
@@ -26,8 +30,6 @@ impl InnerContext {
         // Do not clear messages
     }
     fn get_messages_from_buffer(&mut self, bytes: &[u8]) {
-        let mut messages: Vec<IsoMessage> = Vec::new();
-
         let mut received_buf = bytes;
 
         while received_buf.len() > 0 {
@@ -45,7 +47,12 @@ impl InnerContext {
                 received_buf = &received_buf[partial_received_buf_size..];
 
                 if partial_message_size == self.buffer.len() - LENGTH_PREFIX_SIZE {
-                    messages.push(IsoMessage::new(self.buffer.clone()));
+                    self.messages.push(
+                        IsoMessage::from_buffer(std::mem::take(
+                            &mut self.buffer[LENGTH_PREFIX_SIZE..].to_vec(),
+                        ))
+                        .unwrap(),
+                    );
                     self.reset();
                 }
             } else {
@@ -56,12 +63,19 @@ impl InnerContext {
                 let received_buf_size = received_buf.len();
 
                 if message_size_with_length_header == received_buf_size {
-                    messages.push(IsoMessage::new(received_buf.to_vec()));
+                    self.messages.push(
+                        IsoMessage::from_buffer(received_buf[LENGTH_PREFIX_SIZE..].to_vec())
+                            .unwrap(),
+                    );
                     received_buf = &received_buf[0..0];
                 } else if message_size_with_length_header < received_buf_size {
-                    messages.push(IsoMessage::new(
-                        received_buf[0..message_size_with_length_header].to_vec(),
-                    ));
+                    self.messages.push(
+                        IsoMessage::from_buffer(
+                            received_buf[LENGTH_PREFIX_SIZE..message_size_with_length_header]
+                                .to_vec(),
+                        )
+                        .unwrap(),
+                    );
                     received_buf = &received_buf[message_size_with_length_header..];
                 } else if message_size_with_length_header > received_buf_size {
                     self.buffer.append(&mut received_buf.to_vec());
@@ -72,6 +86,7 @@ impl InnerContext {
     }
 }
 
+#[derive(Debug)]
 pub struct StateMachine<State> {
     inner_context: InnerContext,
     inner_state: State,
@@ -109,6 +124,7 @@ impl StateMachine<State> {
             ..
         } = self
         {
+            // println!("Getting Messages");
             return self.process_delivering();
         }
 
@@ -116,7 +132,9 @@ impl StateMachine<State> {
     }
 
     fn process_ready(&mut self, bytes: &[u8]) {
+        // println!("Processing Ready: {:?}", bytes);
         if received_full_message(bytes) {
+            // println!("Processing Full Message: {:?}", bytes);
             self.inner_state = State::Delivering;
             self.inner_context.get_messages_from_buffer(bytes);
 
@@ -124,6 +142,8 @@ impl StateMachine<State> {
         }
 
         if received_partial_message(&self.inner_context.buffer, bytes) {
+            // println!("Processing Partial Message: {:?}", bytes);
+
             self.inner_state = State::Waiting;
             self.inner_context.get_messages_from_buffer(bytes);
 
@@ -131,6 +151,8 @@ impl StateMachine<State> {
         }
 
         if received_multiple_messages(bytes) {
+            // println!("Processing Multiple Message: {:?}", bytes);
+
             self.inner_state = State::Delivering;
             self.inner_context.get_messages_from_buffer(bytes);
 
@@ -173,7 +195,8 @@ impl StateMachine<State> {
     }
 
     fn process_delivering(&mut self) -> Option<Vec<IsoMessage>> {
-        let iso_messages = self.inner_context.messages.clone();
+        // println!("Processing Delivering: {:?}", self);
+        let iso_messages = std::mem::take(&mut self.inner_context.messages);
         self.inner_context.messages.clear();
 
         if self.inner_context.buffer.is_empty() {

@@ -289,5 +289,91 @@ mod test {
         }
     }
 
-    mod received_multiple_messages {}
+    mod received_multiple_messages {
+        use super::get_buffer_from_file;
+        use crate::message_helpers::received_multiple_messages;
+
+        #[test]
+        fn should_return_false_if_only_one_message() {
+            let buffer =
+                get_buffer_from_file("sample_messages/i2c-authorization-advice-request.bin");
+
+            let results = received_multiple_messages(&buffer);
+
+            assert!(!results);
+        }
+
+        #[test]
+        fn should_return_true_if_buffer_contains_more_then_one_message() {
+            let mut buffer_1 =
+                get_buffer_from_file("sample_messages/i2c-authorization-advice-request.bin");
+            let mut buffer_2 =
+                get_buffer_from_file("sample_messages/i2c-authorization-mastercard-request.bin");
+
+            buffer_1.append(&mut buffer_2);
+
+            let results = received_multiple_messages(&buffer_1);
+
+            assert!(results);
+        }
+    }
+    mod received_rest_of_message {
+        use super::get_buffer_from_file;
+        use crate::message_helpers::received_rest_of_message;
+
+        #[test]
+        fn should_return_false_if_remaining_bytes_more_then_message_length() {
+            let buffer =
+                get_buffer_from_file("sample_messages/i2c-authorization-advice-request.bin");
+
+            let results = received_rest_of_message(buffer.len() + 1, &buffer);
+
+            assert!(!results);
+        }
+
+        #[test]
+        fn should_return_true_if_remaining_bytes_is_same_as_message_length() {
+            let buffer =
+                get_buffer_from_file("sample_messages/i2c-authorization-advice-request.bin");
+
+            let results = received_rest_of_message(buffer.len(), &buffer);
+
+            assert!(results);
+        }
+
+        #[test]
+        fn should_return_true_if_remaining_bytes_is_less_then_message_length() {
+            let buffer =
+                get_buffer_from_file("sample_messages/i2c-authorization-advice-request.bin");
+
+            let results = received_rest_of_message(buffer.len() - 1, &buffer);
+
+            assert!(results);
+        }
+    }
+
+    mod received_new_message {
+        use super::get_buffer_from_file;
+        use crate::message_helpers::received_new_message;
+
+        #[test]
+        fn should_return_true_passed_new_message() {
+            let buffer =
+                get_buffer_from_file("sample_messages/i2c-authorization-advice-request.bin");
+
+            let results = received_new_message(&buffer);
+
+            assert!(results);
+        }
+
+        #[test]
+        fn should_return_false_if_not_new_message() {
+            let buffer =
+                get_buffer_from_file("sample_messages/i2c-authorization-advice-request.bin");
+
+            let results = received_new_message(&buffer[2..]);
+
+            assert!(!results);
+        }
+    }
 }
